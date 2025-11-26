@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-成绩分析系统 - 现代化GUI
-玻璃拟态设计 | 每个学科独立参数设置 | 一键生成报告
+成绩分析系统
+每个学科独立参数设置 | 一键生成报告
 """
 
 import customtkinter as ctk
@@ -17,11 +17,11 @@ ctk.set_default_color_theme("blue")
 
 
 class ModernGradeAnalysisGUI:
-    """现代化成绩分析系统GUI"""
+
     
     def __init__(self):
         self.root = ctk.CTk()
-        self.root.title("成绩分析系统 - 专业版 v5.0")
+        self.root.title("成绩分析系统")
         self.root.geometry("1500x900")
         
         # 学科管理器
@@ -29,8 +29,8 @@ class ModernGradeAnalysisGUI:
         
         # 变量
         self.excel_file = ""
-        self.output_file = "成绩统计分析.docx"
-        self.excel_output_file = "成绩统计数据.xlsx"
+        self.output_file = "统计分析结果.docx"
+        self.excel_output_file = "统计数据.xlsx"
         self.subject_widgets = {}  # 存储每个学科的控件
         
         # 创建界面
@@ -64,7 +64,7 @@ class ModernGradeAnalysisGUI:
         
         subtitle = ctk.CTkLabel(
             sidebar,
-            text="专业版 v5.0",
+            text="v5.0",
             font=ctk.CTkFont(size=13),
             text_color=("gray70", "gray30")
         )
