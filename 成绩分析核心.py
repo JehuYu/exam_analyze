@@ -5,25 +5,45 @@
 包含数据处理和统计计算的核心逻辑
 """
 
-import pandas as pd
-import numpy as np
-from docx import Document
-from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
 import warnings
 import math
-import matplotlib.pyplot as plt
-import matplotlib
-from matplotlib import font_manager
 import os
 
-warnings.filterwarnings('ignore')
+# 延迟导入重量级模块
+pd = None
+np = None
+Document = None
+Pt = Inches = None
+WD_ALIGN_PARAGRAPH = None
+qn = None
+OxmlElement = None
+plt = None
 
-# 设置中文字体
-matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
-matplotlib.rcParams['axes.unicode_minus'] = False
+def _lazy_import():
+    """延迟导入重量级模块以加快启动速度"""
+    global pd, np, Document, Pt, Inches, WD_ALIGN_PARAGRAPH, qn, OxmlElement, plt
+    if pd is None:
+        import pandas
+        import numpy
+        from docx import Document as Doc
+        from docx.shared import Pt as _Pt, Inches as _Inches
+        from docx.enum.text import WD_ALIGN_PARAGRAPH as _WD
+        from docx.oxml.ns import qn as _qn
+        from docx.oxml import OxmlElement as _OE
+        import matplotlib
+        matplotlib.use('Agg')  # 使用非交互式后端
+        import matplotlib.pyplot as _plt
+
+        pd, np = pandas, numpy
+        Document, Pt, Inches = Doc, _Pt, _Inches
+        WD_ALIGN_PARAGRAPH, qn, OxmlElement = _WD, _qn, _OE
+        plt = _plt
+
+        # 设置中文字体
+        matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS']
+        matplotlib.rcParams['axes.unicode_minus'] = False
+
+warnings.filterwarnings('ignore')
 
 
 class SubjectConfig:
@@ -106,15 +126,16 @@ class SubjectManager:
 
 class GradeAnalysisCore:
     """成绩分析核心类"""
-    
+
     def __init__(self, excel_file, subject_manager):
+        _lazy_import()  # 延迟导入
         self.excel_file = excel_file
         self.df = None
         self.subject_manager = subject_manager
         self.subjects = [s.name for s in subject_manager.get_subjects()]
         self.schools = []
         self.statistics = {}
-        
+
     def load_data(self):
         """加载Excel数据"""
         try:
@@ -178,6 +199,57 @@ class GradeAnalysisCore:
 
         print("✓ 所有统计计算完成")
 
+    def _compute_stats_from_scores(self, all_scores, pass_line, excellence_line, max_score, get_school_scores_func):
+        """通用统计计算方法"""
+        total_count = len(all_scores)
+        if total_count == 0:
+            return {'data': pd.DataFrame(), 'pass_line': pass_line, 'excellence_line': excellence_line, 'max_score': max_score}
+
+        sorted_scores = all_scores.sort_values(ascending=False).reset_index(drop=True)
+
+        # 计算分数线
+        top30_idx = math.floor(total_count * 0.3)
+        top30_line = sorted_scores.iloc[top30_idx - 1] if top30_idx > 0 else sorted_scores.max()
+        top80_idx = math.floor(total_count * 0.8)
+        bottom20_line = sorted_scores.iloc[top80_idx] if top80_idx < total_count else sorted_scores.min()
+
+        # 计算每个学校的统计
+        school_stats = []
+        for school in self.schools:
+            school_scores = get_school_scores_func(school)
+            if len(school_scores) == 0:
+                continue
+            count = len(school_scores)
+            school_stats.append({
+                '学校': school, '考试人数': count,
+                '合格率': (school_scores >= pass_line).sum() / count * 100,
+                '优秀率': (school_scores >= excellence_line).sum() / count * 100,
+                '平均分': school_scores.mean(),
+                '后20%': (school_scores <= bottom20_line).sum() / count * 100,
+                '前30%': (school_scores >= top30_line).sum() / count * 100,
+            })
+
+        df_stats = pd.DataFrame(school_stats)
+
+        # 添加排名
+        for col, asc in [('合格率', False), ('优秀率', False), ('平均分', False), ('后20%', True), ('前30%', False)]:
+            df_stats[f'{col}排序'] = df_stats[col].rank(ascending=asc, method='min').astype(int)
+
+        # 添加全区统计
+        all_row = pd.DataFrame([{
+            '学校': '全区', '考试人数': total_count,
+            '合格率': (all_scores >= pass_line).sum() / total_count * 100,
+            '优秀率': (all_scores >= excellence_line).sum() / total_count * 100,
+            '平均分': all_scores.mean(),
+            '后20%': (all_scores <= bottom20_line).sum() / total_count * 100,
+            '前30%': (all_scores >= top30_line).sum() / total_count * 100,
+            '合格率排序': '', '优秀率排序': '', '平均分排序': '', '后20%排序': '', '前30%排序': '',
+        }])
+        df_stats = pd.concat([df_stats, all_row], ignore_index=True)
+
+        return {'data': df_stats, 'pass_line': pass_line, 'excellence_line': excellence_line,
+                'top30_line': top30_line, 'bottom20_line': bottom20_line, 'max_score': max_score}
+
     def _calculate_subject_stats(self, subject):
         """计算单个科目的统计数据"""
         config = self.subject_manager.get_subject(subject)
@@ -185,217 +257,44 @@ class GradeAnalysisCore:
         pass_line = max_score * config.pass_percent / 100
         excellence_line = max_score * config.excellence_percent / 100
 
-        stats = {}
+        all_scores = self.df[self.df[f'{subject}_缺考'] == 'N'][subject].dropna()
 
-        all_students = self.df[self.df[f'{subject}_缺考'] == 'N']
-        all_scores = all_students[subject].dropna()
-
-        total_count = len(all_scores)
-
-        if total_count == 0:
-            return {'data': pd.DataFrame(), 'pass_line': pass_line, 'excellence_line': excellence_line}
-
-        sorted_scores = all_scores.sort_values(ascending=False).reset_index(drop=True)
-
-        top30_count = math.floor(total_count * 0.3)
-        if top30_count > 0 and top30_count <= total_count:
-            top30_line = sorted_scores.iloc[top30_count - 1]
-        else:
-            top30_line = sorted_scores.max()
-
-        top80_count = math.floor(total_count * 0.8)
-        if top80_count < total_count:
-            bottom20_line = sorted_scores.iloc[top80_count]
-        else:
-            bottom20_line = sorted_scores.min()
-
-        school_stats = []
-
-        for school in self.schools:
+        def get_school_scores(school):
             school_data = self.df[self.df['学校名称'] == school]
-            school_students = school_data[school_data[f'{subject}_缺考'] == 'N']
-            school_scores = school_students[subject].dropna()
+            return school_data[school_data[f'{subject}_缺考'] == 'N'][subject].dropna()
 
-            if len(school_scores) == 0:
-                continue
-
-            count = len(school_scores)
-            pass_count = (school_scores >= pass_line).sum()
-            pass_rate = pass_count / count * 100
-            excellence_count = (school_scores >= excellence_line).sum()
-            excellence_rate = excellence_count / count * 100
-            avg_score = school_scores.mean()
-            bottom20_count = (school_scores <= bottom20_line).sum()
-            bottom20_rate = bottom20_count / count * 100
-            top30_count_school = (school_scores >= top30_line).sum()
-            top30_rate = top30_count_school / count * 100
-
-            school_stats.append({
-                '学校': school,
-                '考试人数': count,
-                '合格率': pass_rate,
-                '优秀率': excellence_rate,
-                '平均分': avg_score,
-                '后20%': bottom20_rate,
-                '前30%': top30_rate,
-            })
-
-        df_stats = pd.DataFrame(school_stats)
-
-        df_stats['合格率排序'] = df_stats['合格率'].rank(ascending=False, method='min').astype(int)
-        df_stats['优秀率排序'] = df_stats['优秀率'].rank(ascending=False, method='min').astype(int)
-        df_stats['平均分排序'] = df_stats['平均分'].rank(ascending=False, method='min').astype(int)
-        df_stats['后20%排序'] = df_stats['后20%'].rank(ascending=True, method='min').astype(int)
-        df_stats['前30%排序'] = df_stats['前30%'].rank(ascending=False, method='min').astype(int)
-
-        all_pass_rate = (all_scores >= pass_line).sum() / total_count * 100
-        all_excellence_rate = (all_scores >= excellence_line).sum() / total_count * 100
-        all_avg = all_scores.mean()
-        all_bottom20 = (all_scores <= bottom20_line).sum() / total_count * 100
-        all_top30 = (all_scores >= top30_line).sum() / total_count * 100
-
-        all_row = pd.DataFrame([{
-            '学校': '全区',
-            '考试人数': total_count,
-            '合格率': all_pass_rate,
-            '优秀率': all_excellence_rate,
-            '平均分': all_avg,
-            '后20%': all_bottom20,
-            '前30%': all_top30,
-            '合格率排序': '',
-            '优秀率排序': '',
-            '平均分排序': '',
-            '后20%排序': '',
-            '前30%排序': '',
-        }])
-
-        df_stats = pd.concat([df_stats, all_row], ignore_index=True)
-
-        stats['data'] = df_stats
-        stats['pass_line'] = pass_line
-        stats['excellence_line'] = excellence_line
-        stats['top30_line'] = top30_line
-        stats['bottom20_line'] = bottom20_line
-        stats['max_score'] = max_score
-
-        return stats
+        return self._compute_stats_from_scores(all_scores, pass_line, excellence_line, max_score, get_school_scores)
 
     def _calculate_total_stats(self):
         """计算总分统计"""
-        self.df['总分'] = 0
-        self.df['有效总分'] = True
-
-        total_max_score = sum(s.max_score for s in self.subject_manager.get_subjects())
-        avg_pass_percent = sum(s.pass_percent for s in self.subject_manager.get_subjects()) / len(self.subject_manager.get_subjects())
-        avg_excellence_percent = sum(s.excellence_percent for s in self.subject_manager.get_subjects()) / len(self.subject_manager.get_subjects())
+        subjects_config = self.subject_manager.get_subjects()
+        total_max_score = sum(s.max_score for s in subjects_config)
+        avg_pass_percent = sum(s.pass_percent for s in subjects_config) / len(subjects_config)
+        avg_excellence_percent = sum(s.excellence_percent for s in subjects_config) / len(subjects_config)
 
         pass_line = total_max_score * avg_pass_percent / 100
         excellence_line = total_max_score * avg_excellence_percent / 100
 
+        # 计算总分
+        self.df['总分'] = 0
+        self.df['有效总分'] = True
         for idx, row in self.df.iterrows():
-            total = 0
-            valid = True
-
+            total, valid = 0, True
             for subject in self.subjects:
                 if row[f'{subject}_缺考'] == 'Y' or pd.isna(row[subject]):
                     valid = False
                     break
                 total += row[subject]
-
             self.df.at[idx, '总分'] = total if valid else 0
             self.df.at[idx, '有效总分'] = valid
 
         valid_students = self.df[self.df['有效总分'] == True]
         all_scores = valid_students['总分']
 
-        total_count = len(all_scores)
+        def get_school_scores(school):
+            return valid_students[valid_students['学校名称'] == school]['总分']
 
-        if total_count == 0:
-            return {'data': pd.DataFrame(), 'pass_line': pass_line, 'excellence_line': excellence_line}
-
-        sorted_scores = all_scores.sort_values(ascending=False).reset_index(drop=True)
-
-        top30_count = math.floor(total_count * 0.3)
-        if top30_count > 0:
-            top30_line = sorted_scores.iloc[top30_count - 1]
-        else:
-            top30_line = sorted_scores.max()
-
-        top80_count = math.floor(total_count * 0.8)
-        if top80_count < total_count:
-            bottom20_line = sorted_scores.iloc[top80_count]
-        else:
-            bottom20_line = sorted_scores.min()
-
-        school_stats = []
-
-        for school in self.schools:
-            school_data = valid_students[valid_students['学校名称'] == school]
-            school_scores = school_data['总分']
-
-            if len(school_scores) == 0:
-                continue
-
-            count = len(school_scores)
-            pass_count = (school_scores >= pass_line).sum()
-            pass_rate = pass_count / count * 100
-            excellence_count = (school_scores >= excellence_line).sum()
-            excellence_rate = excellence_count / count * 100
-            avg_score = school_scores.mean()
-            bottom20_count = (school_scores <= bottom20_line).sum()
-            bottom20_rate = bottom20_count / count * 100
-            top30_count_school = (school_scores >= top30_line).sum()
-            top30_rate = top30_count_school / count * 100
-
-            school_stats.append({
-                '学校': school,
-                '考试人数': count,
-                '合格率': pass_rate,
-                '优秀率': excellence_rate,
-                '平均分': avg_score,
-                '后20%': bottom20_rate,
-                '前30%': top30_rate,
-            })
-
-        df_stats = pd.DataFrame(school_stats)
-
-        df_stats['合格率排序'] = df_stats['合格率'].rank(ascending=False, method='min').astype(int)
-        df_stats['优秀率排序'] = df_stats['优秀率'].rank(ascending=False, method='min').astype(int)
-        df_stats['平均分排序'] = df_stats['平均分'].rank(ascending=False, method='min').astype(int)
-        df_stats['后20%排序'] = df_stats['后20%'].rank(ascending=True, method='min').astype(int)
-        df_stats['前30%排序'] = df_stats['前30%'].rank(ascending=False, method='min').astype(int)
-
-        all_pass_rate = (all_scores >= pass_line).sum() / total_count * 100
-        all_excellence_rate = (all_scores >= excellence_line).sum() / total_count * 100
-        all_avg = all_scores.mean()
-        all_bottom20 = (all_scores <= bottom20_line).sum() / total_count * 100
-        all_top30 = (all_scores >= top30_line).sum() / total_count * 100
-
-        all_row = pd.DataFrame([{
-            '学校': '全区',
-            '考试人数': total_count,
-            '合格率': all_pass_rate,
-            '优秀率': all_excellence_rate,
-            '平均分': all_avg,
-            '后20%': all_bottom20,
-            '前30%': all_top30,
-            '合格率排序': '',
-            '优秀率排序': '',
-            '平均分排序': '',
-            '后20%排序': '',
-            '前30%排序': '',
-        }])
-
-        df_stats = pd.concat([df_stats, all_row], ignore_index=True)
-
-        return {
-            'data': df_stats,
-            'pass_line': pass_line,
-            'excellence_line': excellence_line,
-            'top30_line': top30_line,
-            'bottom20_line': bottom20_line,
-            'max_score': total_max_score,
-        }
+        return self._compute_stats_from_scores(all_scores, pass_line, excellence_line, total_max_score, get_school_scores)
 
     def generate_charts(self, output_dir='.'):
         """生成所有图表"""
@@ -1157,155 +1056,81 @@ class GradeAnalysisCore:
         print(f"✓ Excel文件已导出: {output_file}")
         return output_file
 
-    def _add_subject_table(self, doc, subject):
-        """添加单个科目的统计表"""
-        stats = self.statistics[subject]
+    def _add_stats_table(self, doc, title_text, stats, note_text=None):
+        """通用统计表添加方法"""
         df_stats = stats['data']
-
         if len(df_stats) == 0:
             return
 
-        max_score = stats['max_score']
-        pass_line = stats['pass_line']
-        excellence_line = stats['excellence_line']
+        max_score, pass_line, excellence_line = stats['max_score'], stats['pass_line'], stats['excellence_line']
 
+        # 标题
         title = doc.add_paragraph()
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = title.add_run(f'成绩统计表')
-        run.font.size = Pt(12)
-        run.font.bold = True
+        run = title.add_run('成绩统计表')
+        run.font.size, run.font.bold = Pt(12), True
 
+        # 创建表格
         table = doc.add_table(rows=len(df_stats) + 2, cols=12)
         table.style = 'Table Grid'
         self._set_table_border(table)
 
+        # 合并第一行并设置标题
         row0 = table.rows[0]
         cell = row0.cells[0]
         for i in range(1, 12):
             cell.merge(row0.cells[i])
-        cell.text = f'{subject}（{int(max_score)}分）'
-        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        cell.paragraphs[0].runs[0].font.bold = True
-        cell.paragraphs[0].runs[0].font.size = Pt(11)
+        cell.text = f'{title_text}（{int(max_score)}分）'
+        self._set_cell_style(cell, bold=True, size=11)
 
+        # 表头
         headers = ['学校', '考试\n人数', f'合格率\n(%-{int(pass_line)})', '排序',
                    f'优秀率\n(%-{int(excellence_line)})', '排序', '平均分', '排序',
                    '后20％', '排序', '前30％', '排序']
-
-        row1 = table.rows[1]
         for i, header in enumerate(headers):
-            cell = row1.cells[i]
-            cell.text = header
-            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            cell.paragraphs[0].runs[0].font.bold = True
-            cell.paragraphs[0].runs[0].font.size = Pt(10)
+            self._set_cell_style(table.rows[1].cells[i], text=header, bold=True, size=10)
 
+        # 数据行
         for idx, row_data in df_stats.iterrows():
-            row = table.rows[idx + 2]
-
             values = [
-                row_data['学校'],
-                str(int(row_data['考试人数'])),
-                f"{row_data['合格率']:.2f}%",
-                str(row_data['合格率排序']) if row_data['合格率排序'] != '' else '',
-                f"{row_data['优秀率']:.2f}%",
-                str(row_data['优秀率排序']) if row_data['优秀率排序'] != '' else '',
-                f"{row_data['平均分']:.2f}",
-                str(row_data['平均分排序']) if row_data['平均分排序'] != '' else '',
-                f"{row_data['后20%']:.2f}%",
-                str(row_data['后20%排序']) if row_data['后20%排序'] != '' else '',
-                f"{row_data['前30%']:.2f}%",
-                str(row_data['前30%排序']) if row_data['前30%排序'] != '' else '',
+                row_data['学校'], str(int(row_data['考试人数'])),
+                f"{row_data['合格率']:.2f}%", str(row_data['合格率排序']) if row_data['合格率排序'] != '' else '',
+                f"{row_data['优秀率']:.2f}%", str(row_data['优秀率排序']) if row_data['优秀率排序'] != '' else '',
+                f"{row_data['平均分']:.2f}", str(row_data['平均分排序']) if row_data['平均分排序'] != '' else '',
+                f"{row_data['后20%']:.2f}%", str(row_data['后20%排序']) if row_data['后20%排序'] != '' else '',
+                f"{row_data['前30%']:.2f}%", str(row_data['前30%排序']) if row_data['前30%排序'] != '' else '',
             ]
-
+            row = table.rows[idx + 2]
             for i, value in enumerate(values):
-                cell = row.cells[i]
-                cell.text = value
-                if i > 0:
-                    cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                cell.paragraphs[0].runs[0].font.size = Pt(10)
+                bold = row_data['学校'] == '全区'
+                center = i > 0
+                self._set_cell_style(row.cells[i], text=value, bold=bold, size=10, center=center)
 
-                if row_data['学校'] == '全区':
-                    cell.paragraphs[0].runs[0].font.bold = True
+        if note_text:
+            note = doc.add_paragraph(note_text)
+            note.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            note.runs[0].font.size = Pt(9)
 
         doc.add_paragraph()
+
+    def _set_cell_style(self, cell, text=None, bold=False, size=10, center=True):
+        """设置单元格样式"""
+        if text is not None:
+            cell.text = text
+        if center:
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if cell.paragraphs[0].runs:
+            run = cell.paragraphs[0].runs[0]
+            run.font.size = Pt(size)
+            run.font.bold = bold
+
+    def _add_subject_table(self, doc, subject):
+        """添加单个科目的统计表"""
+        self._add_stats_table(doc, subject, self.statistics[subject])
 
     def _add_total_table(self, doc):
         """添加总分统计表"""
-        stats = self.statistics['总分']
-        df_stats = stats['data']
-
-        if len(df_stats) == 0:
-            return
-
-        max_score = stats['max_score']
-        pass_line = stats['pass_line']
-        excellence_line = stats['excellence_line']
-
-        title = doc.add_paragraph()
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = title.add_run(f'成绩统计表')
-        run.font.size = Pt(12)
-        run.font.bold = True
-
-        table = doc.add_table(rows=len(df_stats) + 2, cols=12)
-        table.style = 'Table Grid'
-        self._set_table_border(table)
-
-        row0 = table.rows[0]
-        cell = row0.cells[0]
-        for i in range(1, 12):
-            cell.merge(row0.cells[i])
-        cell.text = f'总分（{int(max_score)}分）'
-        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        cell.paragraphs[0].runs[0].font.bold = True
-        cell.paragraphs[0].runs[0].font.size = Pt(11)
-
-        headers = ['学校', '考试\n人数', f'合格率\n(%-{int(pass_line)})', '排序',
-                   f'优秀率\n(%-{int(excellence_line)})', '排序', '平均分', '排序',
-                   '后20％', '排序', '前30％', '排序']
-
-        row1 = table.rows[1]
-        for i, header in enumerate(headers):
-            cell = row1.cells[i]
-            cell.text = header
-            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-            cell.paragraphs[0].runs[0].font.bold = True
-            cell.paragraphs[0].runs[0].font.size = Pt(10)
-
-        for idx, row_data in df_stats.iterrows():
-            row = table.rows[idx + 2]
-
-            values = [
-                row_data['学校'],
-                str(int(row_data['考试人数'])),
-                f"{row_data['合格率']:.2f}%",
-                str(row_data['合格率排序']) if row_data['合格率排序'] != '' else '',
-                f"{row_data['优秀率']:.2f}%",
-                str(row_data['优秀率排序']) if row_data['优秀率排序'] != '' else '',
-                f"{row_data['平均分']:.2f}",
-                str(row_data['平均分排序']) if row_data['平均分排序'] != '' else '',
-                f"{row_data['后20%']:.2f}%",
-                str(row_data['后20%排序']) if row_data['后20%排序'] != '' else '',
-                f"{row_data['前30%']:.2f}%",
-                str(row_data['前30%排序']) if row_data['前30%排序'] != '' else '',
-            ]
-
-            for i, value in enumerate(values):
-                cell = row.cells[i]
-                cell.text = value
-                if i > 0:
-                    cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                cell.paragraphs[0].runs[0].font.size = Pt(10)
-
-                if row_data['学校'] == '全区':
-                    cell.paragraphs[0].runs[0].font.bold = True
-
-        note = doc.add_paragraph('注：计算总分时未参加所有科目考试的学生未统计在内')
-        note.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        note.runs[0].font.size = Pt(9)
-
-        doc.add_paragraph()
+        self._add_stats_table(doc, '总分', self.statistics['总分'], '注：计算总分时未参加所有科目考试的学生未统计在内')
 
     def _add_score_distribution_table(self, doc):
         """添加分数段分布表"""

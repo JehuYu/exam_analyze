@@ -9,32 +9,87 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import threading
 import os
-from 成绩分析核心 import SubjectConfig, SubjectManager, GradeAnalysisCore
+
+# 延迟导入重量级模块
+SubjectConfig = None
+SubjectManager = None
+GradeAnalysisCore = None
+
+def _lazy_import_core():
+    """延迟导入核心模块"""
+    global SubjectConfig, SubjectManager, GradeAnalysisCore
+    if SubjectConfig is None:
+        from 成绩分析核心 import SubjectConfig as SC, SubjectManager as SM, GradeAnalysisCore as GAC
+        SubjectConfig, SubjectManager, GradeAnalysisCore = SC, SM, GAC
 
 # 设置CustomTkinter主题
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+# 统一样式配置
+STYLES = {
+    'btn_primary': {'fg_color': '#4a9eff', 'hover_color': '#3a8eef'},
+    'btn_success': {'fg_color': '#34c759', 'hover_color': '#24b749'},
+    'btn_danger': {'fg_color': '#e74c3c', 'hover_color': '#c0392b'},
+    'font_title': ('size', 26, 'weight', 'bold'),
+    'font_normal': ('size', 13, 'weight', 'bold'),
+    'font_large': ('size', 16, 'weight', 'bold'),
+}
+
 
 class ModernGradeAnalysisGUI:
+    """现代化成绩分析GUI"""
 
-    
     def __init__(self):
+        _lazy_import_core()  # 延迟导入核心模块
         self.root = ctk.CTk()
         self.root.title("成绩分析系统")
         self.root.geometry("1500x900")
-        
+
         # 学科管理器
         self.subject_manager = SubjectManager()
-        
+
         # 变量
         self.excel_file = ""
         self.output_file = "统计分析结果.docx"
         self.excel_output_file = "统计数据.xlsx"
         self.subject_widgets = {}  # 存储每个学科的控件
-        
+
         # 创建界面
         self._create_ui()
+
+    def _create_button(self, parent, text, command, height=40, style='primary', **kwargs):
+        """创建统一样式的按钮"""
+        style_key = f'btn_{style}'
+        btn_style = STYLES.get(style_key, STYLES['btn_primary'])
+        return ctk.CTkButton(
+            parent, text=text, command=command, height=height,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            **btn_style, **kwargs
+        )
+
+    def _create_slider_row(self, parent, label_text, initial_value, color):
+        """创建滑块行控件"""
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.grid_columnconfigure(1, weight=1)
+
+        label = ctk.CTkLabel(frame, text=label_text, font=ctk.CTkFont(size=14, weight="bold"))
+        label.grid(row=0, column=0, sticky="w")
+
+        value_label = ctk.CTkLabel(
+            frame, text=f"{initial_value}%",
+            font=ctk.CTkFont(size=16, weight="bold"), text_color=color
+        )
+        value_label.grid(row=0, column=2, padx=15, sticky="e")
+
+        slider = ctk.CTkSlider(
+            frame, from_=0, to=100, number_of_steps=100, height=20,
+            command=lambda v, lbl=value_label: lbl.configure(text=f"{int(v)}%")
+        )
+        slider.set(initial_value)
+        slider.grid(row=0, column=1, padx=15, sticky="ew")
+
+        return frame, slider
         
     def _create_ui(self):
         """创建用户界面"""
@@ -88,26 +143,10 @@ class ModernGradeAnalysisGUI:
         )
         self.file_entry.pack(fill="x", pady=(0, 8))
         
-        browse_btn = ctk.CTkButton(
-            file_frame,
-            text="📂 浏览文件",
-            command=self._browse_excel,
-            height=40,
-            fg_color="#4a9eff",
-            hover_color="#3a8eef",
-            font=ctk.CTkFont(size=13, weight="bold")
-        )
+        browse_btn = self._create_button(file_frame, "📂 浏览文件", self._browse_excel)
         browse_btn.pack(fill="x", pady=(0, 8))
-        
-        detect_btn = ctk.CTkButton(
-            file_frame,
-            text="🔍 自动识别学科",
-            command=self._auto_detect_subjects,
-            height=40,
-            fg_color="#34c759",
-            hover_color="#24b749",
-            font=ctk.CTkFont(size=13, weight="bold")
-        )
+
+        detect_btn = self._create_button(file_frame, "🔍 自动识别学科", self._auto_detect_subjects, style='success')
         detect_btn.pack(fill="x")
         
         # 分隔线
@@ -138,27 +177,13 @@ class ModernGradeAnalysisGUI:
         info_text.configure(state="disabled")
         
         # 底部按钮区域
-        self.export_btn = ctk.CTkButton(
-            sidebar,
-            text="📄 生成Word报告",
-            command=self._generate_report,
-            height=50,
-            font=ctk.CTkFont(size=16, weight="bold"),
-            fg_color="#4a9eff",
-            hover_color="#3a8eef"
-        )
+        self.export_btn = self._create_button(sidebar, "📄 生成Word报告", self._generate_report, height=50)
+        self.export_btn.configure(font=ctk.CTkFont(size=16, weight="bold"))
         self.export_btn.grid(row=7, column=0, padx=20, pady=(20, 10), sticky="ew")
 
         # Excel导出按钮
-        self.excel_btn = ctk.CTkButton(
-            sidebar,
-            text="📊 导出Excel数据",
-            command=self._export_excel,
-            height=50,
-            font=ctk.CTkFont(size=16, weight="bold"),
-            fg_color="#34c759",
-            hover_color="#24b749"
-        )
+        self.excel_btn = self._create_button(sidebar, "📊 导出Excel数据", self._export_excel, height=50, style='success')
+        self.excel_btn.configure(font=ctk.CTkFont(size=16, weight="bold"))
         self.excel_btn.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="ew")
 
         # 进度条
@@ -192,15 +217,7 @@ class ModernGradeAnalysisGUI:
         header.pack(side="left")
 
         # 添加学科按钮
-        add_btn = ctk.CTkButton(
-            header_frame,
-            text="➕ 手动添加学科",
-            command=self._add_subject_manually,
-            height=35,
-            fg_color="#34c759",
-            hover_color="#24b749",
-            font=ctk.CTkFont(size=13, weight="bold")
-        )
+        add_btn = self._create_button(header_frame, "➕ 手动添加学科", self._add_subject_manually, height=35, style='success')
         add_btn.pack(side="right", padx=10)
 
         # 学科列表容器（可滚动）
@@ -314,11 +331,8 @@ class ModernGradeAnalysisGUI:
         """创建学科参数卡片"""
         # 卡片容器 - 玻璃拟态效果
         card = ctk.CTkFrame(
-            self.subjects_container,
-            corner_radius=15,
-            fg_color=("white", "gray20"),
-            border_width=1,
-            border_color=("gray80", "gray30")
+            self.subjects_container, corner_radius=15,
+            fg_color=("white", "gray20"), border_width=1, border_color=("gray80", "gray30")
         )
         card.grid(row=idx, column=0, padx=15, pady=12, sticky="ew")
         card.grid_columnconfigure(1, weight=1)
@@ -327,125 +341,38 @@ class ModernGradeAnalysisGUI:
         header_frame = ctk.CTkFrame(card, fg_color="transparent")
         header_frame.grid(row=0, column=0, columnspan=3, padx=25, pady=(20, 15), sticky="ew")
 
-        name_label = ctk.CTkLabel(
-            header_frame,
-            text=f"📚 {subject.name}",
-            font=ctk.CTkFont(size=18, weight="bold")
-        )
-        name_label.pack(side="left")
+        ctk.CTkLabel(header_frame, text=f"📚 {subject.name}", font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
 
-        delete_btn = ctk.CTkButton(
-            header_frame,
-            text="🗑️ 删除",
-            width=80,
-            height=28,
-            command=lambda: self._delete_subject(subject.name),
-            fg_color="#e74c3c",
-            hover_color="#c0392b",
-            font=ctk.CTkFont(size=12)
-        )
+        delete_btn = self._create_button(header_frame, "🗑️ 删除", lambda: self._delete_subject(subject.name), height=28, style='danger', width=80)
+        delete_btn.configure(font=ctk.CTkFont(size=12))
         delete_btn.pack(side="right")
 
         # 满分设置
-        max_score_label = ctk.CTkLabel(
-            card,
-            text="满分:",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        max_score_label.grid(row=1, column=0, padx=(25, 10), pady=8, sticky="w")
-
+        ctk.CTkLabel(card, text="满分:", font=ctk.CTkFont(size=14, weight="bold")).grid(row=1, column=0, padx=(25, 10), pady=8, sticky="w")
         max_score_entry = ctk.CTkEntry(card, width=100, height=35, font=ctk.CTkFont(size=14))
         max_score_entry.insert(0, str(subject.max_score))
         max_score_entry.grid(row=1, column=1, padx=10, pady=8, sticky="w")
+        ctk.CTkLabel(card, text="分", font=ctk.CTkFont(size=13)).grid(row=1, column=2, padx=(0, 25), pady=8, sticky="w")
 
-        max_score_unit = ctk.CTkLabel(card, text="分", font=ctk.CTkFont(size=13))
-        max_score_unit.grid(row=1, column=2, padx=(0, 25), pady=8, sticky="w")
-
-        # 合格线百分比设置
-        pass_frame = ctk.CTkFrame(card, fg_color="transparent")
+        # 使用公共方法创建滑块
+        pass_frame, pass_slider = self._create_slider_row(card, "合格线百分比:", subject.pass_percent, "#4a9eff")
         pass_frame.grid(row=2, column=0, columnspan=3, padx=25, pady=8, sticky="ew")
-        pass_frame.grid_columnconfigure(1, weight=1)
 
-        pass_label = ctk.CTkLabel(
-            pass_frame,
-            text="合格线百分比:",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        pass_label.grid(row=0, column=0, sticky="w")
-
-        pass_value_label = ctk.CTkLabel(
-            pass_frame,
-            text=f"{subject.pass_percent}%",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color="#4a9eff"
-        )
-        pass_value_label.grid(row=0, column=2, padx=15, sticky="e")
-
-        pass_slider = ctk.CTkSlider(
-            pass_frame,
-            from_=0,
-            to=100,
-            number_of_steps=100,
-            height=20,
-            command=lambda v, lbl=pass_value_label: lbl.configure(text=f"{int(v)}%")
-        )
-        pass_slider.set(subject.pass_percent)
-        pass_slider.grid(row=0, column=1, padx=15, sticky="ew")
-
-        # 优秀线百分比设置
-        excel_frame = ctk.CTkFrame(card, fg_color="transparent")
+        excel_frame, excel_slider = self._create_slider_row(card, "优秀线百分比:", subject.excellence_percent, "#34c759")
         excel_frame.grid(row=3, column=0, columnspan=3, padx=25, pady=8, sticky="ew")
-        excel_frame.grid_columnconfigure(1, weight=1)
-
-        excel_label = ctk.CTkLabel(
-            excel_frame,
-            text="优秀线百分比:",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        excel_label.grid(row=0, column=0, sticky="w")
-
-        excel_value_label = ctk.CTkLabel(
-            excel_frame,
-            text=f"{subject.excellence_percent}%",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color="#34c759"
-        )
-        excel_value_label.grid(row=0, column=2, padx=15, sticky="e")
-
-        excel_slider = ctk.CTkSlider(
-            excel_frame,
-            from_=0,
-            to=100,
-            number_of_steps=100,
-            height=20,
-            command=lambda v, lbl=excel_value_label: lbl.configure(text=f"{int(v)}%")
-        )
-        excel_slider.set(subject.excellence_percent)
-        excel_slider.grid(row=0, column=1, padx=15, sticky="ew")
 
         # 保存按钮
-        save_btn = ctk.CTkButton(
-            card,
-            text="💾 保存设置",
-            width=120,
-            height=38,
-            command=lambda: self._save_subject_config(
-                subject.name,
-                max_score_entry,
-                pass_slider,
-                excel_slider
-            ),
-            fg_color="#34c759",
-            hover_color="#24b749",
-            font=ctk.CTkFont(size=14, weight="bold")
+        save_btn = self._create_button(
+            card, "💾 保存设置",
+            lambda: self._save_subject_config(subject.name, max_score_entry, pass_slider, excel_slider),
+            height=38, style='success', width=120
         )
+        save_btn.configure(font=ctk.CTkFont(size=14, weight="bold"))
         save_btn.grid(row=4, column=0, columnspan=3, padx=25, pady=(15, 20))
 
         # 存储控件引用
         self.subject_widgets[subject.name] = {
-            'max_score': max_score_entry,
-            'pass_slider': pass_slider,
-            'excel_slider': excel_slider
+            'max_score': max_score_entry, 'pass_slider': pass_slider, 'excel_slider': excel_slider
         }
 
     def _delete_subject(self, name):
@@ -469,134 +396,108 @@ class ModernGradeAnalysisGUI:
         except ValueError:
             messagebox.showerror("错误", "请输入有效的数字！")
 
-    def _generate_report(self):
-        """生成报告"""
+    def _validate_inputs(self):
+        """验证输入"""
         if not self.excel_file:
             messagebox.showwarning("警告", "请先选择Excel文件！")
-            return
-
+            return False
         if not self.subject_manager.get_subjects():
             messagebox.showwarning("警告", "请先识别或添加学科！")
+            return False
+        return True
+
+    def _generate_report(self):
+        """生成报告"""
+        if not self._validate_inputs():
             return
 
-        # 选择输出文件
         output_file = filedialog.asksaveasfilename(
-            title="保存报告",
-            defaultextension=".docx",
+            title="保存报告", defaultextension=".docx",
             filetypes=[("Word文档", "*.docx"), ("所有文件", "*.*")],
             initialfile="成绩统计分析.docx"
         )
-
         if not output_file:
             return
 
         self.output_file = output_file
-
-        # 在后台线程中生成报告
-        thread = threading.Thread(target=self._generate_report_thread)
-        thread.daemon = True
+        thread = threading.Thread(target=self._generate_report_thread, daemon=True)
         thread.start()
 
-    def _generate_report_thread(self):
-        """后台生成报告"""
+    def _run_with_progress(self, btn, btn_text_working, btn_text_normal, task_func, success_msg):
+        """通用后台任务执行器"""
         try:
-            self.export_btn.configure(state="disabled", text="⏳ 生成中...")
-
-            def update_progress(value, text):
-                self.progress.set(value)
-                self.status_label.configure(text=f"⏳ {text}")
-
-            update_progress(0.1, "加载数据...")
-
-            # 创建分析核心
-            core = GradeAnalysisCore(self.excel_file, self.subject_manager)
-
-            if not core.load_data():
-                messagebox.showerror("错误", "加载数据失败！")
-                return
-
-            update_progress(0.3, "计算统计数据...")
-            core.calculate_statistics()
-
-            update_progress(0.6, "生成Word报告...")
-            core.generate_word_report(self.output_file, update_progress)
-
-            update_progress(1.0, "完成！")
-
-            messagebox.showinfo("成功", f"✅ 报告已生成！\n\n保存位置:\n{self.output_file}")
-
-        except Exception as e:
-            messagebox.showerror("错误", f"生成报告失败：\n{str(e)}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.export_btn.configure(state="normal", text="📄 生成Word报告")
-            self.progress.set(0)
-            self.status_label.configure(text="✅ 就绪")
-
-    def _export_excel(self):
-        """导出Excel数据"""
-        if not self.excel_file:
-            messagebox.showwarning("警告", "请先选择Excel文件！")
-            return
-
-        if not self.subject_manager.get_subjects():
-            messagebox.showwarning("警告", "请先识别或添加学科！")
-            return
-
-        # 选择输出文件
-        output_file = filedialog.asksaveasfilename(
-            title="保存Excel数据",
-            defaultextension=".xlsx",
-            filetypes=[("Excel文件", "*.xlsx"), ("所有文件", "*.*")],
-            initialfile="成绩统计数据.xlsx"
-        )
-
-        if not output_file:
-            return
-
-        self.excel_output_file = output_file
-
-        # 在后台线程中导出
-        thread = threading.Thread(target=self._export_excel_thread)
-        thread.daemon = True
-        thread.start()
-
-    def _export_excel_thread(self):
-        """后台导出Excel"""
-        try:
-            self.excel_btn.configure(state="disabled", text="⏳ 导出中...")
+            btn.configure(state="disabled", text=btn_text_working)
             self.status_label.configure(text="⏳ 加载数据...")
-            self.progress.set(0.2)
+            self.progress.set(0.1)
 
             # 创建分析核心
             core = GradeAnalysisCore(self.excel_file, self.subject_manager)
-
             if not core.load_data():
                 messagebox.showerror("错误", "加载数据失败！")
                 return
 
             self.status_label.configure(text="⏳ 计算统计数据...")
-            self.progress.set(0.5)
+            self.progress.set(0.3)
             core.calculate_statistics()
 
+            # 执行特定任务
+            task_func(core)
+
+            self.progress.set(1.0)
+            self.status_label.configure(text="✅ 完成！")
+            messagebox.showinfo("成功", success_msg)
+
+        except Exception as e:
+            messagebox.showerror("错误", f"操作失败：\n{str(e)}")
+        finally:
+            btn.configure(state="normal", text=btn_text_normal)
+            self.progress.set(0)
+            self.status_label.configure(text="✅ 就绪")
+
+    def _generate_report_thread(self):
+        """后台生成报告"""
+        def update_progress(value, text):
+            self.progress.set(value)
+            self.status_label.configure(text=f"⏳ {text}")
+
+        def task(core):
+            self.status_label.configure(text="⏳ 生成Word报告...")
+            self.progress.set(0.6)
+            core.generate_word_report(self.output_file, update_progress)
+
+        self._run_with_progress(
+            self.export_btn, "⏳ 生成中...", "📄 生成Word报告",
+            task, f"✅ 报告已生成！\n\n保存位置:\n{self.output_file}"
+        )
+
+    def _export_excel(self):
+        """导出Excel数据"""
+        if not self._validate_inputs():
+            return
+
+        output_file = filedialog.asksaveasfilename(
+            title="保存Excel数据", defaultextension=".xlsx",
+            filetypes=[("Excel文件", "*.xlsx"), ("所有文件", "*.*")],
+            initialfile="成绩统计数据.xlsx"
+        )
+        if not output_file:
+            return
+
+        self.excel_output_file = output_file
+        thread = threading.Thread(target=self._export_excel_thread, daemon=True)
+        thread.start()
+
+    def _export_excel_thread(self):
+        """后台导出Excel"""
+        def task(core):
             self.status_label.configure(text="⏳ 导出Excel...")
             self.progress.set(0.8)
             core.export_to_excel(self.excel_output_file)
 
-            self.progress.set(1.0)
-            self.status_label.configure(text="✅ 完成！")
-
-            messagebox.showinfo("成功", f"✅ Excel数据已导出！\n\n保存位置:\n{self.excel_output_file}\n\n包含内容:\n• 各科目统计\n• 总分统计\n• 原始数据\n• 整体分析\n• 科目分析\n• 学校分析\n• 改进建议")
-
-        except Exception as e:
-            messagebox.showerror("错误", f"导出Excel失败：\n{str(e)}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.excel_btn.configure(state="normal", text="📊 导出Excel数据")
-            self.progress.set(0)
-            self.status_label.configure(text="✅ 就绪")
+        self._run_with_progress(
+            self.excel_btn, "⏳ 导出中...", "📊 导出Excel数据",
+            task, f"✅ Excel数据已导出！\n\n保存位置:\n{self.excel_output_file}"
+        )
 
     def run(self):
         """运行应用"""
